@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   Eye,
+  FileDown,
   FileText,
   KeyRound,
   Plus,
@@ -23,6 +24,12 @@ import {
   SwitchBackupSnapshot,
   SwitchSecretCredentials,
 } from '../types/switch';
+import {
+  downloadTextFile,
+  exportRawCommandsPdf,
+  extractVlanBlockFromCli,
+  parseVlanInputFromUser,
+} from '../utils/exportArtifacts';
 import { simBackupSwitch, simCheckSwitch, simExecSwitch, simPushSwitch } from '../utils/fleetSimulator';
 import { extractPushableCommands } from '../utils/iosGenerator';
 import { LivePortMonitor } from './LivePortMonitor';
@@ -388,13 +395,40 @@ export const FleetDashboard: React.FC<FleetDashboardProps> = ({
   };
 
   const handleDownloadBackupFile = (snap: SwitchBackupSnapshot) => {
-    const blob = new Blob([snap.configText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${snap.hostname}-${snap.capturedAt.slice(0, 10)}.cfg`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadTextFile(`${snap.hostname}-${snap.capturedAt.slice(0, 10)}.cfg`, snap.configText);
+  };
+
+  const handleDownloadBackupConfigText = (snap: SwitchBackupSnapshot) => {
+    downloadTextFile('config.text', snap.configText);
+  };
+
+  const handleDownloadBackupVlan = (snap: SwitchBackupSnapshot) => {
+    const content = extractVlanBlockFromCli(snap.configText, snap.hostname);
+    downloadTextFile('vlan.txt', content);
+  };
+
+  const handleExportBackupPdf = async (snap: SwitchBackupSnapshot) => {
+    const vlans = parseVlanInputFromUser(snap.configText);
+    await exportRawCommandsPdf({
+      title:
+        lang === 'fa'
+          ? `بکاپ دستورات سوییچ — ${snap.hostname}`
+          : `Cisco Switch Backup CLI — ${snap.hostname}`,
+      subtitle:
+        lang === 'fa'
+          ? `زمان بکاپ: ${snap.capturedAt.replace('T', ' ').slice(0, 19)}`
+          : `Captured at ${snap.capturedAt.replace('T', ' ').slice(0, 19)}`,
+      metaPairs: [
+        { label: lang === 'fa' ? 'نام دستگاه' : 'Hostname', value: snap.hostname },
+        { label: lang === 'fa' ? 'تاریخ' : 'Captured', value: snap.capturedAt.slice(0, 10) },
+        { label: lang === 'fa' ? 'تعداد VLAN' : 'VLANs', value: `${vlans.length} VLANs` },
+        { label: lang === 'fa' ? 'تعداد خطوط' : 'Lines', value: `${snap.lineCount} lines` },
+      ],
+      filename: `${snap.hostname}-backup.pdf`,
+      cliText: snap.configText,
+      lang,
+      vlanSummary: vlans,
+    });
   };
 
   const handleDownloadAllBackups = () => {
@@ -1193,13 +1227,34 @@ export const FleetDashboard: React.FC<FleetDashboardProps> = ({
                     <span className="text-slate-400 mx-1.5">·</span>
                     <span className="font-mono text-slate-500 tabular-nums">{b.lineCount} lines</span>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center gap-1 shrink-0">
                     <button
                       type="button"
                       onClick={() => setViewingBackup(b)}
                       className="px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded"
                     >
                       {lang === 'fa' ? 'مشاهده' : 'Inspect'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadBackupConfigText(b)}
+                      className="px-2 py-1 text-[11px] font-mono font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded"
+                    >
+                      config.text
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadBackupVlan(b)}
+                      className="px-2 py-1 text-[11px] font-mono font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded"
+                    >
+                      vlan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExportBackupPdf(b)}
+                      className="px-2 py-1 text-[11px] font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded"
+                    >
+                      PDF
                     </button>
                     <button
                       type="button"
@@ -1279,14 +1334,36 @@ export const FleetDashboard: React.FC<FleetDashboardProps> = ({
                 <div className="text-xs font-mono font-semibold text-slate-900" dir="ltr">
                   {viewingBackup.hostname} · {viewingBackup.capturedAt.replace('T', ' ').slice(0, 19)}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBackupConfigText(viewingBackup)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-mono font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded"
+                  >
+                    <span>config.text</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadBackupVlan(viewingBackup)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-mono font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded"
+                  >
+                    <span>vlan</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportBackupPdf(viewingBackup)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded"
+                  >
+                    <FileDown className="w-3 h-3" />
+                    <span>PDF</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleDownloadBackupFile(viewingBackup)}
                     className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded"
                   >
                     <Download className="w-3 h-3" />
-                    <span>{lang === 'fa' ? 'دانلود .cfg' : 'Download .cfg'}</span>
+                    <span>.cfg</span>
                   </button>
                   <button
                     type="button"

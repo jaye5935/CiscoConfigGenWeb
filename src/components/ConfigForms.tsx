@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Lock, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, FileText, Layers, Lock, Plus, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { DEFAULT_HARDENING, HARDENING_STRICT_BASELINE } from '../data/switchModels';
 import {
   Language,
@@ -12,6 +12,12 @@ import {
   SwitchModelSpec,
   VlanConfig,
 } from '../types/switch';
+import {
+  downloadTextFile,
+  generateConfigTextFile,
+  generateVlanFileContent,
+  parseVlanInputFromUser,
+} from '../utils/exportArtifacts';
 import { resolveHardening } from '../utils/iosGenerator';
 import { SwitchFaceplate } from './SwitchFaceplate';
 
@@ -48,9 +54,113 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
   const [newRouteMask, setNewRouteMask] = useState('255.255.0.0');
   const [newRouteHop, setNewRouteHop] = useState('192.168.99.1');
   const [hardeningActionNotice, setHardeningActionNotice] = useState<string | null>(null);
+  const [vlanBulkInput, setVlanBulkInput] = useState('');
+  const [vlanImportNotice, setVlanImportNotice] = useState<string | null>(null);
+  const vlanFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [mgmtVlanDraft, setMgmtVlanDraft] = useState(String(config.mgmtVlanId));
+
+  useEffect(() => {
+    setMgmtVlanDraft(String(config.mgmtVlanId));
+  }, [config.mgmtVlanId]);
+
+  const detectedBulkVlans = useMemo(() => parseVlanInputFromUser(vlanBulkInput), [vlanBulkInput]);
+
+  const applyParsedVlans = (items: VlanConfig[], mode: 'merge' | 'replace') => {
+    if (items.length === 0) {
+      setVlanImportNotice(
+        lang === 'fa'
+          ? 'هیچ VLAN معتبری (۲ تا ۴۰۹۴) در متن ورودی شناسایی نشد.'
+          : 'No valid VLANs (2-4094) detected in input.'
+      );
+      return;
+    }
+
+    onChange((prev) => {
+      if (mode === 'replace') {
+        return {
+          ...prev,
+          vlans: items,
+        };
+      }
+      const map = new Map<number, VlanConfig>();
+      for (const existing of prev.vlans) {
+        map.set(existing.id, existing);
+      }
+      for (const incoming of items) {
+        const current = map.get(incoming.id);
+        map.set(incoming.id, current ? { ...current, ...incoming } : incoming);
+      }
+      return {
+        ...prev,
+        vlans: Array.from(map.values()).sort((a, b) => a.id - b.id),
+      };
+    });
+
+    setVlanImportNotice(
+      lang === 'fa'
+        ? `${items.length} VLAN با موفقیت ${mode === 'replace' ? 'جایگزین' : 'به لیست اضافه'} شد.`
+        : `${items.length} VLAN(s) ${mode === 'replace' ? 'replaced' : 'merged into database'}.`
+    );
+    setTimeout(() => setVlanImportNotice(null), 3500);
+  };
+
+  const handleVlanFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setVlanBulkInput(text);
+      const parsed = parseVlanInputFromUser(text);
+      if (parsed.length > 0) {
+        setVlanImportNotice(
+          lang === 'fa'
+            ? `فایل «${file.name}» خوانده شد (${parsed.length} VLAN شناسایی شد). برای اعمال یکی از دکمه‌ها را بزنید.`
+            : `Read "${file.name}" (${parsed.length} VLANs detected). Click Merge or Replace to apply.`
+        );
+      } else {
+        setVlanImportNotice(
+          lang === 'fa'
+            ? `در فایل «${file.name}» خط VLAN معتبری پیدا نشد.`
+            : `No valid VLAN entries found in "${file.name}".`
+        );
+      }
+    } catch {
+      setVlanImportNotice(lang === 'fa' ? 'خطا در خواندن فایل ورودی.' : 'Failed to read selected file.');
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   const updateField = <K extends keyof SwitchConfigState>(key: K, value: SwitchConfigState[K]) => {
     onChange((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSetMgmtVlan = (rawId: number, optionalName?: string) => {
+    if (isNaN(rawId) || rawId < 1 || rawId > 4094) return;
+    const id = Math.floor(rawId);
+    onChange((prev) => {
+      const exists = prev.vlans.some((v) => v.id === id);
+      let nextVlans: VlanConfig[] = prev.vlans.map((v) => ({
+        ...v,
+        isManagement: v.id === id,
+      }));
+      if (id >= 2 && !exists) {
+        const newVlan: VlanConfig = {
+          id,
+          name: optionalName?.trim() || 'MANAGEMENT',
+          isManagement: true,
+          sviEnabled: false,
+          sviIp: prev.mgmtIp || `10.10.${id > 254 ? 250 : id}.1`,
+          sviMask: prev.mgmtMask || '255.255.255.0',
+        };
+        nextVlans = [...nextVlans, newVlan].sort((a, b) => a.id - b.id);
+      }
+      return {
+        ...prev,
+        mgmtVlanId: id,
+        vlans: nextVlans,
+      };
+    });
   };
 
   const handleAddVlan = () => {
@@ -142,20 +252,61 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
               />
             </div>
             <div>
-              <label className={labelCls}>{lang === 'fa' ? 'VLAN مدیریت (Management VLAN)' : 'Management VLAN ID'}</label>
-              <select
-                dir="ltr"
-                value={config.mgmtVlanId}
-                onChange={(e) => updateField('mgmtVlanId', Number(e.target.value))}
-                className={monoInputCls}
-              >
-                <option value={1}>VLAN 1 (default)</option>
-                {config.vlans.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    VLAN {v.id} — {v.name}
-                  </option>
-                ))}
-              </select>
+              <label className={labelCls}>
+                {lang === 'fa' ? 'VLAN مدیریت (ورود مستقیم یا انتخاب)' : 'Management VLAN ID (Direct Input or Pick)'}
+              </label>
+              <div className="flex items-center gap-2" dir="ltr">
+                <input
+                  type="number"
+                  min={1}
+                  max={4094}
+                  value={mgmtVlanDraft}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setMgmtVlanDraft(next);
+                    const val = parseInt(next, 10);
+                    if (!isNaN(val) && val >= 1 && val <= 4094) {
+                      handleSetMgmtVlan(val);
+                    }
+                  }}
+                  onBlur={() => setMgmtVlanDraft(String(config.mgmtVlanId))}
+                  className="w-24 px-2.5 py-1.5 text-sm font-mono bg-white border border-slate-300 rounded focus:outline-none focus:border-blue-600 text-slate-900 tabular-nums"
+                  placeholder="99"
+                />
+                <select
+                  value={
+                    config.mgmtVlanId === 1 || config.vlans.some((v) => v.id === config.mgmtVlanId)
+                      ? config.mgmtVlanId
+                      : ''
+                  }
+                  onChange={(e) => {
+                    if (e.target.value) handleSetMgmtVlan(Number(e.target.value));
+                  }}
+                  className="flex-1 px-2.5 py-1.5 text-sm font-mono bg-white border border-slate-300 rounded focus:outline-none focus:border-blue-600 text-slate-900"
+                >
+                  <option value={1}>VLAN 1 (default)</option>
+                  {config.vlans.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      VLAN {v.id} — {v.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {config.mgmtVlanId >= 2 && (
+                <div className="mt-1.5 flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500 whitespace-nowrap">
+                    {lang === 'fa' ? 'نام VLAN مدیریت:' : 'Mgmt VLAN Name:'}
+                  </span>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={config.vlans.find((v) => v.id === config.mgmtVlanId)?.name || ''}
+                    onChange={(e) => handleUpdateVlan(config.mgmtVlanId, { name: e.target.value })}
+                    className="flex-1 px-2 py-0.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded focus:bg-white focus:border-blue-500 focus:outline-none"
+                    placeholder="MANAGEMENT"
+                  />
+                </div>
+              )}
             </div>
             <div>
               <label className={labelCls}>{lang === 'fa' ? 'آدرس IP مدیریت' : 'Management IP Address'}</label>
@@ -263,21 +414,58 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
   }
 
   if (section === 'auth') {
+    const enEnabled = config.enableSecretEnabled !== false;
+    const enMode = config.enableMode || 'secret';
     return (
       <div className="space-y-5">
         <div className="bg-white border border-slate-200 rounded-md p-4">
-          <h3 className="text-sm font-semibold text-slate-900 mb-3 pb-2 border-b border-slate-100">
-            {lang === 'fa' ? 'حساب‌های کاربری و رمزهای دسترسی' : 'Credentials & Privilege Secret'}
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2 border-b border-slate-100">
+            <h3 className="text-sm font-semibold text-slate-900">
+              {lang === 'fa' ? 'حساب‌های کاربری و رمزهای دسترسی' : 'Credentials & Privilege Secret'}
+            </h3>
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800 bg-slate-50 px-2.5 py-1 rounded border border-slate-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enEnabled}
+                onChange={(e) => updateField('enableSecretEnabled', e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600"
+              />
+              <span>{lang === 'fa' ? 'فعال‌سازی رمز Enable (en)' : 'Require Enable (en) Password'}</span>
+            </label>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className={labelCls}>{lang === 'fa' ? 'رمز Enable Secret' : 'Enable Secret Password'}</label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="block text-xs font-medium text-slate-700">
+                  {lang === 'fa' ? 'رمز Enable (en) — اختیاری' : 'Enable (en) Password (Optional)'}
+                </label>
+                <select
+                  dir="ltr"
+                  disabled={!enEnabled}
+                  value={enMode}
+                  onChange={(e) => updateField('enableMode', e.target.value as 'secret' | 'password')}
+                  className="px-1.5 py-0.5 text-[11px] font-mono bg-slate-50 border border-slate-300 rounded text-slate-800 disabled:opacity-50 focus:outline-none focus:border-blue-600"
+                >
+                  <option value="secret">enable secret (Encrypted)</option>
+                  <option value="password">enable password (Legacy)</option>
+                </select>
+              </div>
               <input
                 type="text"
                 dir="ltr"
+                disabled={!enEnabled}
                 value={config.enableSecret}
                 onChange={(e) => updateField('enableSecret', e.target.value)}
-                className={monoInputCls}
+                className={`${monoInputCls} disabled:bg-slate-100 disabled:text-slate-400`}
+                placeholder={
+                  enEnabled
+                    ? lang === 'fa'
+                      ? 'رمز ورود به حالت enable'
+                      : 'Privilege EXEC password'
+                    : lang === 'fa'
+                      ? 'غیرفعال (بدون رمز en در خروجی CLI)'
+                      : 'Disabled (omitted from CLI)'
+                }
               />
             </div>
             <div>
@@ -436,8 +624,105 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
   }
 
   if (section === 'vlans') {
+    const activeMgmtVlan = config.vlans.find((v) => v.id === config.mgmtVlanId);
     return (
       <div className="space-y-5">
+        {/* Direct Management VLAN Input Card */}
+        <div className="bg-white border border-blue-200 rounded-md p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">
+                {lang === 'fa' ? 'تنظیم VLAN مدیریت (Management VLAN)' : 'Management VLAN Configuration'}
+              </h3>
+              <p className="text-xs text-slate-500">
+                {lang === 'fa'
+                  ? 'شناسه VLAN مدیریت (۱ تا ۴۰۹۴)، نام آن و آدرس IP مدیریتی سوییچ را مستقیم وارد کنید.'
+                  : 'Enter the Switch Management VLAN ID (1-4094), name, and management SVI IP directly.'}
+              </p>
+            </div>
+            <span className="px-2.5 py-1 text-xs font-mono font-semibold text-blue-800 bg-blue-50 border border-blue-200 rounded tabular-nums" dir="ltr">
+              interface Vlan{config.mgmtVlanId}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div>
+              <label className={labelCls}>{lang === 'fa' ? 'شناسه VLAN مدیریت' : 'Mgmt VLAN ID'}</label>
+              <input
+                type="number"
+                dir="ltr"
+                min={1}
+                max={4094}
+                value={mgmtVlanDraft}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setMgmtVlanDraft(next);
+                  const val = parseInt(next, 10);
+                  if (!isNaN(val) && val >= 1 && val <= 4094) {
+                    handleSetMgmtVlan(val);
+                  }
+                }}
+                onBlur={() => setMgmtVlanDraft(String(config.mgmtVlanId))}
+                className={monoInputCls}
+                placeholder="99"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>{lang === 'fa' ? 'نام VLAN مدیریت' : 'Mgmt VLAN Name'}</label>
+              <input
+                type="text"
+                dir="ltr"
+                disabled={config.mgmtVlanId === 1}
+                value={config.mgmtVlanId === 1 ? 'default' : activeMgmtVlan?.name || 'MANAGEMENT'}
+                onChange={(e) => {
+                  if (config.mgmtVlanId >= 2) {
+                    if (activeMgmtVlan) {
+                      handleUpdateVlan(config.mgmtVlanId, { name: e.target.value });
+                    } else {
+                      handleSetMgmtVlan(config.mgmtVlanId, e.target.value);
+                    }
+                  }
+                }}
+                className={`${monoInputCls} disabled:bg-slate-100 disabled:text-slate-400`}
+                placeholder="MANAGEMENT"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>{lang === 'fa' ? 'آدرس IP مدیریت' : 'Management IP'}</label>
+              <input
+                type="text"
+                dir="ltr"
+                value={config.mgmtIp}
+                onChange={(e) => updateField('mgmtIp', e.target.value)}
+                className={monoInputCls}
+                placeholder="192.168.99.10"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>{lang === 'fa' ? 'Subnet Mask' : 'Subnet Mask'}</label>
+              <input
+                type="text"
+                dir="ltr"
+                value={config.mgmtMask}
+                onChange={(e) => updateField('mgmtMask', e.target.value)}
+                className={monoInputCls}
+                placeholder="255.255.255.0"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>{lang === 'fa' ? 'Default Gateway' : 'Default Gateway'}</label>
+              <input
+                type="text"
+                dir="ltr"
+                value={config.defaultGateway}
+                onChange={(e) => updateField('defaultGateway', e.target.value)}
+                className={monoInputCls}
+                placeholder="192.168.99.1"
+              />
+            </div>
+          </div>
+        </div>
+
         <div className="bg-white border border-slate-200 rounded-md p-4">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-2 border-b border-slate-100">
             <div>
@@ -455,17 +740,35 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
               </p>
             </div>
 
-            {model.layer3Capable && (
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-800 bg-slate-100 px-3 py-1.5 rounded border border-slate-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={config.ipRoutingEnabled}
-                  onChange={(e) => updateField('ipRoutingEnabled', e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 text-blue-600"
-                />
-                <span className="font-mono">ip routing</span>
-              </label>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => downloadTextFile('vlan.txt', generateVlanFileContent(config))}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded transition-colors whitespace-nowrap shrink-0"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>{lang === 'fa' ? 'خروجی فایل vlan' : 'Export vlan'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadTextFile('config.text', generateConfigTextFile(config))}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded transition-colors whitespace-nowrap shrink-0"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>{lang === 'fa' ? 'خروجی config.text' : 'Export config.text'}</span>
+              </button>
+              {model.layer3Capable && (
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-800 bg-slate-100 px-3 py-1 rounded border border-slate-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.ipRoutingEnabled}
+                    onChange={(e) => updateField('ipRoutingEnabled', e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600"
+                  />
+                  <span className="font-mono">ip routing</span>
+                </label>
+              )}
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -474,6 +777,7 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
                 <tr className="border-b border-slate-200 text-slate-500 bg-slate-50">
                   <th className="py-2 px-2.5 text-start font-medium">VLAN ID</th>
                   <th className="py-2 px-2.5 text-start font-medium">{lang === 'fa' ? 'نام VLAN' : 'Name'}</th>
+                  <th className="py-2 px-2.5 text-center font-medium">{lang === 'fa' ? 'مدیریت' : 'Mgmt'}</th>
                   {model.layer3Capable && config.ipRoutingEnabled && (
                     <>
                       <th className="py-2 px-2.5 text-start font-medium">SVI</th>
@@ -485,73 +789,89 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {config.vlans.map((vlan) => (
-                  <tr key={vlan.id} className="hover:bg-slate-50/70">
-                    <td className="py-2 px-2.5 font-mono font-semibold text-slate-800 tabular-nums">{vlan.id}</td>
-                    <td className="py-2 px-2.5">
-                      <input
-                        type="text"
-                        dir="ltr"
-                        value={vlan.name}
-                        onChange={(e) => handleUpdateVlan(vlan.id, { name: e.target.value })}
-                        className="w-full px-2 py-1 text-xs font-mono border border-slate-200 rounded focus:border-blue-500 focus:outline-none"
-                      />
-                    </td>
-                    {model.layer3Capable && config.ipRoutingEnabled && (
-                      <>
-                        <td className="py-2 px-2.5">
-                          <input
-                            type="checkbox"
-                            checked={!!vlan.sviEnabled}
-                            onChange={(e) => handleUpdateVlan(vlan.id, { sviEnabled: e.target.checked })}
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600"
-                          />
-                        </td>
-                        <td className="py-2 px-2.5">
-                          <div className="flex gap-1.5" dir="ltr">
+                {config.vlans.map((vlan) => {
+                  const isMgmt = config.mgmtVlanId === vlan.id;
+                  return (
+                    <tr key={vlan.id} className={isMgmt ? 'bg-blue-50/40' : 'hover:bg-slate-50/70'}>
+                      <td className="py-2 px-2.5 font-mono font-semibold text-slate-800 tabular-nums">{vlan.id}</td>
+                      <td className="py-2 px-2.5">
+                        <input
+                          type="text"
+                          dir="ltr"
+                          value={vlan.name}
+                          onChange={(e) => handleUpdateVlan(vlan.id, { name: e.target.value })}
+                          className="w-full px-2 py-1 text-xs font-mono border border-slate-200 rounded focus:border-blue-500 focus:outline-none"
+                        />
+                      </td>
+                      <td className="py-2 px-2.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleSetMgmtVlan(vlan.id, vlan.name)}
+                          className={`px-2 py-0.5 text-[11px] font-medium rounded border transition-colors whitespace-nowrap ${
+                            isMgmt
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400 hover:text-blue-700'
+                          }`}
+                        >
+                          {isMgmt ? (lang === 'fa' ? 'مدیریت' : 'Active') : lang === 'fa' ? 'انتخاب' : 'Set'}
+                        </button>
+                      </td>
+                      {model.layer3Capable && config.ipRoutingEnabled && (
+                        <>
+                          <td className="py-2 px-2.5">
+                            <input
+                              type="checkbox"
+                              checked={!!vlan.sviEnabled}
+                              onChange={(e) => handleUpdateVlan(vlan.id, { sviEnabled: e.target.checked })}
+                              className="w-4 h-4 rounded border-slate-300 text-blue-600"
+                            />
+                          </td>
+                          <td className="py-2 px-2.5">
+                            <div className="flex gap-1.5" dir="ltr">
+                              <input
+                                type="text"
+                                disabled={!vlan.sviEnabled}
+                                value={vlan.sviIp || ''}
+                                onChange={(e) => handleUpdateVlan(vlan.id, { sviIp: e.target.value })}
+                                className="w-28 px-2 py-1 text-xs font-mono border border-slate-200 rounded disabled:bg-slate-100"
+                                placeholder="10.10.10.1"
+                              />
+                              <input
+                                type="text"
+                                disabled={!vlan.sviEnabled}
+                                value={vlan.sviMask || ''}
+                                onChange={(e) => handleUpdateVlan(vlan.id, { sviMask: e.target.value })}
+                                className="w-28 px-2 py-1 text-xs font-mono border border-slate-200 rounded disabled:bg-slate-100"
+                                placeholder="255.255.255.0"
+                              />
+                            </div>
+                          </td>
+                          <td className="py-2 px-2.5">
                             <input
                               type="text"
+                              dir="ltr"
                               disabled={!vlan.sviEnabled}
-                              value={vlan.sviIp || ''}
-                              onChange={(e) => handleUpdateVlan(vlan.id, { sviIp: e.target.value })}
+                              value={vlan.helperAddress || ''}
+                              onChange={(e) => handleUpdateVlan(vlan.id, { helperAddress: e.target.value })}
                               className="w-28 px-2 py-1 text-xs font-mono border border-slate-200 rounded disabled:bg-slate-100"
-                              placeholder="10.10.10.1"
+                              placeholder="10.10.1.50"
                             />
-                            <input
-                              type="text"
-                              disabled={!vlan.sviEnabled}
-                              value={vlan.sviMask || ''}
-                              onChange={(e) => handleUpdateVlan(vlan.id, { sviMask: e.target.value })}
-                              className="w-28 px-2 py-1 text-xs font-mono border border-slate-200 rounded disabled:bg-slate-100"
-                              placeholder="255.255.255.0"
-                            />
-                          </div>
-                        </td>
-                        <td className="py-2 px-2.5">
-                          <input
-                            type="text"
-                            dir="ltr"
-                            disabled={!vlan.sviEnabled}
-                            value={vlan.helperAddress || ''}
-                            onChange={(e) => handleUpdateVlan(vlan.id, { helperAddress: e.target.value })}
-                            className="w-28 px-2 py-1 text-xs font-mono border border-slate-200 rounded disabled:bg-slate-100"
-                            placeholder="10.10.1.50"
-                          />
-                        </td>
-                      </>
-                    )}
-                    <td className="py-2 px-2.5 text-end">
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteVlan(vlan.id)}
-                        className="p-1 text-slate-400 hover:text-red-600 transition-colors"
-                        title={lang === 'fa' ? 'حذف VLAN' : 'Remove VLAN'}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                          </td>
+                        </>
+                      )}
+                      <td className="py-2 px-2.5 text-end">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteVlan(vlan.id)}
+                          className="p-1 text-slate-400 hover:text-red-600 transition-colors"
+                          title={lang === 'fa' ? 'حذف VLAN' : 'Remove VLAN'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -589,6 +909,93 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
               <span>{lang === 'fa' ? 'افزودن VLAN' : 'Add VLAN'}</span>
             </button>
           </div>
+        </div>
+
+        {/* Receive / Bulk Import VLAN Section from User (Text, show vlan brief, or file) */}
+        <div className="bg-white border border-slate-200 rounded-md p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">
+                {lang === 'fa'
+                  ? 'دریافت بخش VLAN از کاربر (ورود گروهی یا فایل)'
+                  : 'Import / Receive VLANs from User (Text or File)'}
+              </h3>
+              <p className="text-xs text-slate-500">
+                {lang === 'fa'
+                  ? 'لیست VLANها (مثل 10, USERS)، دستورات vlan/name سیسکو، خروجی show vlan brief یا فایل config.text / vlan را وارد کنید.'
+                  : 'Paste "10, USERS", Cisco "vlan / name" commands, "show vlan brief", or upload a vlan / config.text file.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                ref={vlanFileInputRef}
+                type="file"
+                accept=".txt,.text,.cfg,.conf,.log"
+                onChange={handleVlanFileUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => vlanFileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded transition-colors whitespace-nowrap shrink-0"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>{lang === 'fa' ? 'انتخاب فایل vlan / config.text' : 'Upload vlan / config.text'}</span>
+              </button>
+            </div>
+          </div>
+
+          <textarea
+            rows={5}
+            dir="ltr"
+            value={vlanBulkInput}
+            onChange={(e) => setVlanBulkInput(e.target.value)}
+            className="w-full p-2.5 text-xs font-mono bg-slate-50 focus:bg-white border border-slate-300 rounded focus:outline-none focus:border-blue-600 text-slate-800"
+            placeholder={`10, USERS_LAN\n20, VOIP_PHONES\n30: SERVERS 10.10.30.1 255.255.255.0\n\n! OR paste Cisco IOS commands:\nvlan 40\n name GUEST_WIFI\n exit`}
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-slate-600 font-mono tabular-nums">
+              {detectedBulkVlans.length > 0 ? (
+                <span className="text-emerald-700 font-semibold">
+                  {lang === 'fa'
+                    ? `${detectedBulkVlans.length} VLAN معتبر شناسایی شد: ${detectedBulkVlans.map((v) => v.id).join(', ')}`
+                    : `Detected ${detectedBulkVlans.length} VLAN(s): ${detectedBulkVlans.map((v) => v.id).join(', ')}`}
+                </span>
+              ) : (
+                <span className="text-slate-400">
+                  {lang === 'fa' ? 'در انتظار ورود لیست VLAN...' : 'Waiting for VLAN input...'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={detectedBulkVlans.length === 0}
+                onClick={() => applyParsedVlans(detectedBulkVlans, 'merge')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 rounded transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{lang === 'fa' ? 'افزودن / ادغام در جدول' : 'Merge into Table'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={detectedBulkVlans.length === 0}
+                onClick={() => applyParsedVlans(detectedBulkVlans, 'replace')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 disabled:bg-slate-100 disabled:text-slate-400 border border-amber-300 rounded transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{lang === 'fa' ? 'جایگزینی کل VLANها' : 'Replace All VLANs'}</span>
+              </button>
+            </div>
+          </div>
+
+          {vlanImportNotice && (
+            <div className="px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded">
+              {vlanImportNotice}
+            </div>
+          )}
         </div>
 
         {model.layer3Capable && config.ipRoutingEnabled && (

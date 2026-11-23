@@ -61,12 +61,12 @@ export function validateSwitchConfig(config: SwitchConfigState): ValidationWarni
     });
   }
 
-  if (!config.enableSecret.trim()) {
+  if (config.enableSecretEnabled !== false && !config.enableSecret.trim()) {
     warnings.push({
       id: 'enable-secret',
       severity: 'warning',
-      messageFa: 'رمز Enable Secret تعیین نشده است؛ امنیت دسترسی Console/VTY کاهش می‌یابد.',
-      messageEn: 'Enable Secret is empty; privileged EXEC access will be unprotected.',
+      messageFa: 'رمز Enable (en) فعال است اما خالی رها شده است؛ امنیت دسترسی Console/VTY کاهش می‌یابد.',
+      messageEn: 'Enable password is active but empty; privileged EXEC access will be unprotected.',
     });
   }
 
@@ -261,8 +261,9 @@ export function generateCiscoCli(config: SwitchConfigState): string {
     lines.push(`ip domain-name ${config.domainName.trim()}`);
   }
 
-  if (config.enableSecret.trim()) {
-    lines.push(`enable secret ${config.enableSecret.trim()}`);
+  if (config.enableSecretEnabled !== false && config.enableSecret.trim()) {
+    const cmd = config.enableMode === 'password' ? 'enable password' : 'enable secret';
+    lines.push(`${cmd} ${config.enableSecret.trim()}`);
   }
 
   if (config.adminUsername.trim() && config.adminPassword.trim()) {

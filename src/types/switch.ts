@@ -132,6 +132,8 @@ export interface SwitchConfigState {
   timezoneOffsetMinutes: number;
   bannerMotd: string;
   // Auth & Access
+  enableSecretEnabled?: boolean;
+  enableMode?: 'secret' | 'password';
   enableSecret: string;
   adminUsername: string;
   adminPassword: string;
