@@ -1,5 +1,12 @@
-import { getSwitchModel } from '../data/switchModels';
-import { PortConfig, SwitchConfigState } from '../types/switch';
+import { DEFAULT_HARDENING, getSwitchModel } from '../data/switchModels';
+import { PortConfig, SwitchConfigState, SwitchHardeningConfig } from '../types/switch';
+
+export function resolveHardening(h?: SwitchHardeningConfig): SwitchHardeningConfig {
+  return {
+    ...DEFAULT_HARDENING,
+    ...(h || {}),
+  };
+}
 
 export interface ValidationWarning {
   id: string;
@@ -79,6 +86,36 @@ export function validateSwitchConfig(config: SwitchConfigState): ValidationWarni
       severity: 'warning',
       messageFa: `VLAN مدیریت (${config.mgmtVlanId}) در لیست VLAN ها تعریف نشده است.`,
       messageEn: `Management VLAN (${config.mgmtVlanId}) is not in the VLAN database.`,
+    });
+  }
+
+  if (config.vtyTransportInput !== 'ssh') {
+    warnings.push({
+      id: 'vty-telnet',
+      severity: 'warning',
+      messageFa: 'پروتکل Telnet روی VTY فعال است؛ برای هاردینگ استاندارد فقط از SSH استفاده کنید.',
+      messageEn: 'Telnet is permitted on VTY lines; restrict transport input to ssh for hardening.',
+    });
+  }
+
+  const h = resolveHardening(config.hardening);
+  if (h.vtyAclEnabled && !h.vtyAllowedSubnet.trim()) {
+    warnings.push({
+      id: 'vty-acl-empty',
+      severity: 'warning',
+      messageFa: 'فیلتر ACL مدیریت VTY فعال است اما رنج IP مدیریت وارد نشده است.',
+      messageEn: 'VTY management ACL is enabled, but allowed subnet/wildcard is empty.',
+    });
+  }
+
+  if (h.shutdownVlan1Interface && config.mgmtVlanId === 1 && config.mgmtIp.trim()) {
+    warnings.push({
+      id: 'vlan1-shutdown-mgmt-conflict',
+      severity: 'warning',
+      messageFa:
+        'گزینه خاموش کردن و حذف IP از Vlan1 فعال است؛ بنابراین IP مدیریت روی VLAN 1 اعمال نمی‌شود (مناسب اتصال با کابل کنسول یا پس از انتقال مدیریت به VLAN دیگر).',
+      messageEn:
+        'Shutdown Vlan1 is active while Management VLAN is 1; Vlan1 IP will be stripped (safe for Console Cable only).',
     });
   }
 
@@ -172,6 +209,11 @@ function buildInterfaceBody(p: PortConfig, config: SwitchConfigState): string[] 
     }
   }
 
+  const h = resolveHardening(config.hardening);
+  if (h.disableDtpNegotiation) {
+    lines.push(' switchport nonegotiate');
+  }
+
   if (model.poeCapable && p.kind === 'copper' && !p.poeEnabled) {
     lines.push(' power inline never');
   }
@@ -257,8 +299,50 @@ export function generateCiscoCli(config: SwitchConfigState): string {
     lines.push('errdisable recovery interval 300');
   }
 
+  const hardening = resolveHardening(config.hardening);
+
+  comment('--- Switch Security Hardening (Control Plane & Login Protection) ---');
+  if (hardening.disableUnusedServices) {
+    lines.push('no service finger');
+    lines.push('no service pad');
+    lines.push('no service tcp-small-servers');
+    lines.push('no service udp-small-servers');
+  }
+  if (hardening.disableBootpAndSourceRoute) {
+    lines.push('no ip bootp server');
+    lines.push('no ip source-route');
+    lines.push('no ip gratuitous-arps');
+  }
+  if (hardening.enableTcpKeepalives) {
+    lines.push('service tcp-keepalives-in');
+    lines.push('service tcp-keepalives-out');
+  }
+  if (hardening.enableTimestampsLogging) {
+    lines.push('service timestamps debug datetime msec localtime show-timezone');
+    lines.push('service timestamps log datetime msec localtime show-timezone');
+  }
+  if (hardening.limitConsoleLogging) {
+    lines.push('logging console warnings');
+  }
+  if (hardening.enableAaaNewModel) {
+    lines.push('aaa new-model');
+    lines.push('aaa authentication login default local');
+    lines.push('aaa authorization exec default local');
+  }
+  if (hardening.minPasswordLength >= 6) {
+    lines.push(`security passwords min-length ${hardening.minPasswordLength}`);
+  }
+  if (hardening.enableLoginBruteForceBlock) {
+    lines.push('login block-for 120 attempts 3 within 60');
+    lines.push('login on-failure log');
+    lines.push('login on-success log');
+  }
+
   comment('--- Spanning-Tree & Layer 2 Global ---');
   lines.push(`spanning-tree mode ${config.stpMode}`);
+  if (hardening.globalBpduGuardDefault) {
+    lines.push('spanning-tree portfast bpduguard default');
+  }
   if (config.stpRootPrimary) {
     lines.push(`spanning-tree vlan 1-4094 priority ${config.stpPriority}`);
   }
@@ -298,10 +382,23 @@ export function generateCiscoCli(config: SwitchConfigState): string {
 
   // Management SVI + Additional enabled SVIs
   const sviWritten = new Set<number>();
-  if (config.mgmtIp.trim() && config.mgmtMask.trim()) {
+  if (hardening.shutdownVlan1Interface) {
+    lines.push('interface Vlan1');
+    lines.push(' no ip address');
+    lines.push(' shutdown');
+    lines.push(' exit');
+    sviWritten.add(1);
+  }
+
+  if (config.mgmtIp.trim() && config.mgmtMask.trim() && !(hardening.shutdownVlan1Interface && config.mgmtVlanId === 1)) {
     lines.push(`interface Vlan${config.mgmtVlanId}`);
     lines.push(' description Management_SVI');
     lines.push(` ip address ${config.mgmtIp.trim()} ${config.mgmtMask.trim()}`);
+    if (hardening.hardenSviInterfaces) {
+      lines.push(' no ip redirects');
+      lines.push(' no ip unreachables');
+      lines.push(' no ip proxy-arp');
+    }
     lines.push(' no shutdown');
     lines.push(' exit');
     sviWritten.add(config.mgmtVlanId);
@@ -315,6 +412,11 @@ export function generateCiscoCli(config: SwitchConfigState): string {
         lines.push(` ip address ${vlan.sviIp} ${vlan.sviMask}`);
         if (vlan.helperAddress?.trim()) {
           lines.push(` ip helper-address ${vlan.helperAddress.trim()}`);
+        }
+        if (hardening.hardenSviInterfaces) {
+          lines.push(' no ip redirects');
+          lines.push(' no ip unreachables');
+          lines.push(' no ip proxy-arp');
         }
         lines.push(' no shutdown');
         lines.push(' exit');
@@ -393,6 +495,17 @@ export function generateCiscoCli(config: SwitchConfigState): string {
     lines.push(`ip ssh version ${config.sshVersion}`);
     lines.push('ip ssh time-out 60');
     lines.push('ip ssh authentication-retries 3');
+    if (hardening.sshSourceVlanEnabled && config.mgmtVlanId) {
+      lines.push(`ip ssh source-interface Vlan${config.mgmtVlanId}`);
+    }
+  }
+
+  if (hardening.vtyAclEnabled && hardening.vtyAllowedSubnet.trim()) {
+    comment('--- Management VTY Access Control List ---');
+    lines.push('ip access-list standard MGMT_SSH_ONLY');
+    lines.push(` permit ${hardening.vtyAllowedSubnet.trim()}`);
+    lines.push(' deny any log');
+    lines.push(' exit');
   }
 
   comment('--- Console & VTY Access Lines ---');
@@ -410,6 +523,9 @@ export function generateCiscoCli(config: SwitchConfigState): string {
   lines.push('line vty 0 15');
   lines.push(' login local');
   lines.push(` transport input ${config.vtyTransportInput}`);
+  if (hardening.vtyAclEnabled && hardening.vtyAllowedSubnet.trim()) {
+    lines.push(' access-class MGMT_SSH_ONLY in');
+  }
   lines.push(' logging synchronous');
   lines.push(` exec-timeout ${config.vtyExecTimeoutMin} 0`);
   lines.push(' exit');

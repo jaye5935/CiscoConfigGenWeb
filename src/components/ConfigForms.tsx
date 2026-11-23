@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Lock, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { DEFAULT_HARDENING, HARDENING_STRICT_BASELINE } from '../data/switchModels';
 import {
   Language,
   PortConfig,
@@ -7,9 +8,11 @@ import {
   StaticRoute,
   StpMode,
   SwitchConfigState,
+  SwitchHardeningConfig,
   SwitchModelSpec,
   VlanConfig,
 } from '../types/switch';
+import { resolveHardening } from '../utils/iosGenerator';
 import { SwitchFaceplate } from './SwitchFaceplate';
 
 export type ConfigSection = 'system' | 'auth' | 'vlans' | 'ports' | 'security';
@@ -44,6 +47,7 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
   const [newRouteNet, setNewRouteNet] = useState('10.20.0.0');
   const [newRouteMask, setNewRouteMask] = useState('255.255.0.0');
   const [newRouteHop, setNewRouteHop] = useState('192.168.99.1');
+  const [hardeningActionNotice, setHardeningActionNotice] = useState<string | null>(null);
 
   const updateField = <K extends keyof SwitchConfigState>(key: K, value: SwitchConfigState[K]) => {
     onChange((prev) => ({ ...prev, [key]: value }));
@@ -943,8 +947,433 @@ export const ConfigForms: React.FC<ConfigFormsProps> = ({
   }
 
   // section === 'security'
+  const hardening = resolveHardening(config.hardening);
+
+  const updateHardening = <K extends keyof SwitchHardeningConfig>(
+    key: K,
+    value: SwitchHardeningConfig[K]
+  ) => {
+    onChange((prev) => ({
+      ...prev,
+      hardening: {
+        ...resolveHardening(prev.hardening),
+        [key]: value,
+      },
+    }));
+  };
+
+  const hardeningChecks = [
+    hardening.disableUnusedServices,
+    hardening.disableBootpAndSourceRoute,
+    hardening.enableTcpKeepalives,
+    hardening.enableTimestampsLogging,
+    hardening.limitConsoleLogging,
+    hardening.enableAaaNewModel,
+    hardening.minPasswordLength >= 8,
+    hardening.enableLoginBruteForceBlock,
+    hardening.sshSourceVlanEnabled,
+    hardening.vtyAclEnabled && !!hardening.vtyAllowedSubnet.trim(),
+    hardening.globalBpduGuardDefault,
+    hardening.disableDtpNegotiation,
+    hardening.hardenSviInterfaces,
+    hardening.shutdownVlan1Interface,
+    config.vtyTransportInput === 'ssh' && config.enableSsh && config.disableHttpServer,
+  ];
+  const activeHardeningCount = hardeningChecks.filter(Boolean).length;
+
+  const applyStrictHardeningBaseline = () => {
+    onChange((prev) => ({
+      ...prev,
+      servicePasswordEncryption: true,
+      disableHttpServer: true,
+      enableHttpsServer: false,
+      enableSsh: true,
+      sshVersion: 2,
+      rsaModulus: Math.max(2048, prev.rsaModulus) as 2048 | 4096,
+      vtyTransportInput: 'ssh',
+      cdpEnabled: false,
+      errdisableRecovery: true,
+      dhcpSnoopingEnabled: true,
+      hardening: { ...HARDENING_STRICT_BASELINE },
+    }));
+    setHardeningActionNotice(
+      lang === 'fa'
+        ? 'پروفایل هاردینگ کامل (CIS Baseline) اعمال شد.'
+        : 'Full CIS Hardening Baseline applied.'
+    );
+    setTimeout(() => setHardeningActionNotice(null), 3000);
+  };
+
+  const applyAccessPortsHardening = () => {
+    const count = config.ports.filter((p) => p.kind === 'copper' && p.mode === 'access').length;
+    onChange((prev) => ({
+      ...prev,
+      ports: prev.ports.map((p) => {
+        if (p.kind === 'copper' && p.mode === 'access') {
+          return {
+            ...p,
+            portfast: true,
+            bpduGuard: true,
+            portSecurity: true,
+            maxMac: Math.min(p.maxMac || 2, 3),
+            violationMode: 'restrict',
+            stormControlBroadcast: p.stormControlBroadcast || 40,
+          };
+        }
+        return p;
+      }),
+    }));
+    setHardeningActionNotice(
+      lang === 'fa'
+        ? `هاردینگ لایه ۲ روی ${count} پورت Access اعمال شد.`
+        : `Hardened ${count} access ports (PortFast, BPDU Guard, Port-Security).`
+    );
+    setTimeout(() => setHardeningActionNotice(null), 3000);
+  };
+
+  const lockdownDefaultVlan1Ports = () => {
+    const lockedCount = config.ports.filter(
+      (p) => p.kind === 'copper' && p.mode === 'access' && p.accessVlan === 1
+    ).length;
+    onChange((prev) => {
+      const hasBlackhole = prev.vlans.some((v) => v.id === 999);
+      const nextVlans = hasBlackhole
+        ? prev.vlans
+        : [...prev.vlans, { id: 999, name: 'BLACKHOLE_UNUSED' }];
+      return {
+        ...prev,
+        vlans: nextVlans,
+        ports: prev.ports.map((p) => {
+          if (p.kind === 'copper' && p.mode === 'access' && p.accessVlan === 1) {
+            return {
+              ...p,
+              mode: 'shutdown',
+              accessVlan: 999,
+              poeEnabled: false,
+              description: p.description || 'UNUSED_SHUTDOWN',
+            };
+          }
+          return p;
+        }),
+      };
+    });
+    setHardeningActionNotice(
+      lockedCount > 0
+        ? lang === 'fa'
+          ? `${lockedCount} پورت بلااستفاده (VLAN 1) به VLAN 999 منتقل و Shutdown شد.`
+          : `Moved ${lockedCount} unused VLAN 1 ports to VLAN 999 and shut down.`
+        : lang === 'fa'
+          ? 'پورت فعالی روی VLAN 1 پیدا نشد.'
+          : 'No active ports found on VLAN 1.'
+    );
+    setTimeout(() => setHardeningActionNotice(null), 3000);
+  };
+
   return (
     <div className="space-y-5">
+      {/* Cisco Switch Hardening Panel */}
+      <div className="bg-white border border-slate-200 rounded-md p-4 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+              <h3 className="text-sm font-semibold text-slate-900">
+                {lang === 'fa'
+                  ? 'هاردینگ امنیتی سوییچ (Cisco IOS Hardening)'
+                  : 'Cisco Switch Security Hardening'}
+              </h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+              {lang === 'fa'
+                ? `${activeHardeningCount} از ${hardeningChecks.length} کنترل امنیتی استاندارد فعال است.`
+                : `${activeHardeningCount} of ${hardeningChecks.length} baseline hardening controls enabled.`}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={applyStrictHardeningBaseline}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-700 hover:bg-emerald-800 rounded transition-colors whitespace-nowrap shrink-0"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>
+                {lang === 'fa' ? 'اعمال هاردینگ کامل (CIS)' : 'Apply Full CIS Hardening'}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onChange((prev) => ({
+                  ...prev,
+                  hardening: { ...DEFAULT_HARDENING },
+                }))
+              }
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded transition-colors whitespace-nowrap shrink-0"
+            >
+              {lang === 'fa' ? 'حالت استاندارد' : 'Default Preset'}
+            </button>
+          </div>
+        </div>
+
+        {hardeningActionNotice && (
+          <div className="text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+            {hardeningActionNotice}
+          </div>
+        )}
+
+        {/* Group A: Control Plane & Services */}
+        <div className="space-y-2.5">
+          <h4 className="text-xs font-semibold text-slate-800">
+            {lang === 'fa'
+              ? 'الف) سخت‌سازی سرویس‌ها و Control Plane'
+              : 'A) Control Plane & Unused Services'}
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.disableUnusedServices}
+                onChange={(e) => updateHardening('disableUnusedServices', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'بستن سرویس‌های غیرضروری (finger, pad, small-servers)'
+                  : 'Disable small-servers, finger & PAD services'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.disableBootpAndSourceRoute}
+                onChange={(e) => updateHardening('disableBootpAndSourceRoute', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'غیرفعال‌سازی BOOTP، Source-Route و Gratuitous ARP'
+                  : 'Disable BOOTP server, IP source-route & gratuitous-arps'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.enableTcpKeepalives}
+                onChange={(e) => updateHardening('enableTcpKeepalives', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'فعال‌سازی TCP Keepalives ورودی/خروجی (پاک‌سازی VTY معلق)'
+                  : 'Enable TCP keepalives-in/out for stale sessions'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.enableTimestampsLogging}
+                onChange={(e) => updateHardening('enableTimestampsLogging', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'ثبت زمان دقیق میلی‌ثانیه روی لاگ‌ها (timestamps msec)'
+                  : 'Enable millisecond localtime timestamps on logs'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.limitConsoleLogging}
+                onChange={(e) => updateHardening('limitConsoleLogging', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'محدودسازی لاگ کنسول به warnings (logging console warnings)'
+                  : 'Restrict console logging to warnings level'}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {/* Group B: Auth, Brute-Force & VTY ACL */}
+        <div className="pt-3 border-t border-slate-100 space-y-3">
+          <h4 className="text-xs font-semibold text-slate-800">
+            {lang === 'fa'
+              ? 'ب) امنیت ورود، AAA و محدودسازی دسترسی SSH / VTY'
+              : 'B) AAA, Brute-Force Protection & VTY ACL'}
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.enableAaaNewModel}
+                onChange={(e) => updateHardening('enableAaaNewModel', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'فعال‌سازی aaa new-model (احراز هویت و Exec محلی)'
+                  : 'Enable aaa new-model (local login & exec authz)'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.enableLoginBruteForceBlock}
+                onChange={(e) => updateHardening('enableLoginBruteForceBlock', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'ضد Brute-Force (بلاک ۱۲۰s پس از ۳ خطا + لاگ ورود)'
+                  : 'Brute-force block (120s on 3 fails + login logs)'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.sshSourceVlanEnabled}
+                onChange={(e) => updateHardening('sshSourceVlanEnabled', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? `محدودسازی مبدأ SSH به Vlan${config.mgmtVlanId}`
+                  : `Bind SSH source-interface to Vlan${config.mgmtVlanId}`}
+              </span>
+            </label>
+            <div className="flex items-center gap-2 text-xs text-slate-700">
+              <label className="whitespace-nowrap">
+                {lang === 'fa' ? 'حداقل طول رمز عبور:' : 'Min Password Length:'}
+              </label>
+              <input
+                type="number"
+                dir="ltr"
+                min={0}
+                max={32}
+                value={hardening.minPasswordLength}
+                onChange={(e) =>
+                  updateHardening('minPasswordLength', Math.max(0, Math.min(32, Number(e.target.value) || 0)))
+                }
+                className="w-16 px-2 py-1 text-xs font-mono border border-slate-300 rounded tabular-nums"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center pt-1">
+            <label className="flex items-center gap-2 text-xs font-medium text-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.vtyAclEnabled}
+                onChange={(e) => updateHardening('vtyAclEnabled', e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'محدودسازی دسترسی SSH/VTY با ACL مدیریت (MGMT_SSH_ONLY)'
+                  : 'Restrict VTY SSH via Management ACL (MGMT_SSH_ONLY)'}
+              </span>
+            </label>
+            <input
+              type="text"
+              dir="ltr"
+              disabled={!hardening.vtyAclEnabled}
+              value={hardening.vtyAllowedSubnet}
+              onChange={(e) => updateHardening('vtyAllowedSubnet', e.target.value)}
+              className={monoInputCls}
+              placeholder="192.168.99.0 0.0.0.255"
+            />
+          </div>
+        </div>
+
+        {/* Group C: Layer 2, SVI & Bulk Port Hardening */}
+        <div className="pt-3 border-t border-slate-100 space-y-3">
+          <h4 className="text-xs font-semibold text-slate-800">
+            {lang === 'fa'
+              ? 'ج) هاردینگ لایه ۲، SVI و پورت‌های بلااستفاده'
+              : 'C) Layer 2, SVI & Port Lockdown Hardening'}
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.globalBpduGuardDefault}
+                onChange={(e) => updateHardening('globalBpduGuardDefault', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'فعال‌سازی سراسری BPDU Guard Default'
+                  : 'Global spanning-tree portfast bpduguard default'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.disableDtpNegotiation}
+                onChange={(e) => updateHardening('disableDtpNegotiation', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'غیرفعال‌سازی DTP روی پورت‌ها (switchport nonegotiate)'
+                  : 'Disable DTP negotiation (switchport nonegotiate)'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.hardenSviInterfaces}
+                onChange={(e) => updateHardening('hardenSviInterfaces', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'بستن Redirect / Proxy-ARP / Unreachables روی SVIها'
+                  : 'Disable ip redirects, proxy-arp & unreachables on SVIs'}
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hardening.shutdownVlan1Interface}
+                onChange={(e) => updateHardening('shutdownVlan1Interface', e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded border-slate-300 text-blue-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'خاموش کردن و بدون IP کردن interface Vlan1 (مناسب کابل کنسول)'
+                  : 'Shutdown & strip IP from interface Vlan1 (Console Cable safe)'}
+              </span>
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={applyAccessPortsHardening}
+              className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded transition-colors"
+            >
+              {lang === 'fa'
+                ? 'ایمن‌سازی همه پورت‌های Access (PortFast + BPDU Guard + Port-Security)'
+                : 'Harden All Access Ports (PortFast + BPDU Guard + Port-Security)'}
+            </button>
+            <button
+              type="button"
+              onClick={lockdownDefaultVlan1Ports}
+              className="px-3 py-1.5 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded transition-colors"
+            >
+              {lang === 'fa'
+                ? 'انتقال پورت‌های VLAN 1 به VLAN 999 و Shutdown'
+                : 'Lock Down Unused VLAN 1 Ports (VLAN 999 + Shutdown)'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white border border-slate-200 rounded-md p-4">
         <h3 className="text-sm font-semibold text-slate-900 mb-3 pb-2 border-b border-slate-100">
           {lang === 'fa' ? 'پروتکل Spanning-Tree و امنیت لایه ۲' : 'Spanning-Tree & Layer 2 Protection'}

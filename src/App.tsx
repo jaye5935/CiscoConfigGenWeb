@@ -47,7 +47,7 @@ import {
   SwitchConfigState,
   SwitchSecretCredentials,
 } from './types/switch';
-import { generateCiscoCli, validateSwitchConfig } from './utils/iosGenerator';
+import { generateCiscoCli, resolveHardening, validateSwitchConfig } from './utils/iosGenerator';
 
 const STORAGE_KEY = 'ciscoswitch_studio_config_v1';
 const FLEET_STORAGE_KEY = 'ciscoswitch_studio_fleet_v1';
@@ -459,8 +459,8 @@ export default function App() {
     },
     {
       id: 'security',
-      labelFa: '۵. امنیت STP و SNMP',
-      labelEn: '5. Security & SNMP',
+      labelFa: '۵. امنیت، هاردینگ و SNMP',
+      labelEn: '5. Hardening & SNMP',
       icon: <ShieldCheck className="w-4 h-4 shrink-0" />,
     },
   ];
@@ -895,6 +895,16 @@ export default function App() {
                     setConnectedPortLabel(label);
                   }}
                   autoTriggerPushCounter={autoTriggerPushCounter}
+                  shutdownVlan1={resolveHardening(config.hardening).shutdownVlan1Interface}
+                  onToggleShutdownVlan1={(enabled) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      hardening: {
+                        ...resolveHardening(prev.hardening),
+                        shutdownVlan1Interface: enabled,
+                      },
+                    }))
+                  }
                 />
               )}
             </div>

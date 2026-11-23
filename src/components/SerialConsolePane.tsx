@@ -33,6 +33,8 @@ interface SerialConsolePaneProps {
   connectedPortLabel: string;
   onConnectionChange: (status: 'disconnected' | 'usb-serial' | 'simulator' | 'ssh', label: string) => void;
   autoTriggerPushCounter: number;
+  shutdownVlan1: boolean;
+  onToggleShutdownVlan1: (enabled: boolean) => void;
 }
 
 export const SerialConsolePane: React.FC<SerialConsolePaneProps> = ({
@@ -43,6 +45,8 @@ export const SerialConsolePane: React.FC<SerialConsolePaneProps> = ({
   connectedPortLabel,
   onConnectionChange,
   autoTriggerPushCounter,
+  shutdownVlan1,
+  onToggleShutdownVlan1,
 }) => {
   const [transportTab, setTransportTab] = useState<'serial' | 'ssh'>('serial');
 
@@ -827,6 +831,29 @@ export const SerialConsolePane: React.FC<SerialConsolePaneProps> = ({
             />
             <span>{lang === 'fa' ? 'توقف هنگام خطای CLI' : 'Stop on CLI error'}</span>
           </label>
+
+          {transportTab === 'serial' && (
+            <label
+              className="flex items-center gap-1.5 cursor-pointer text-emerald-800 font-medium"
+              title={
+                lang === 'fa'
+                  ? 'در صورت اتصال با کابل کنسول، با خیال راحت interface Vlan1 را بدون IP و Shutdown می‌کند'
+                  : 'Safely strips IP and shuts down interface Vlan1 when pushing via Console Cable'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={shutdownVlan1}
+                onChange={(e) => onToggleShutdownVlan1(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-slate-300 text-emerald-600"
+              />
+              <span>
+                {lang === 'fa'
+                  ? 'خاموش و بدون IP کردن Vlan1 (کابل کنسول)'
+                  : 'No IP & Shutdown Vlan1 (Console)'}
+              </span>
+            </label>
+          )}
         </div>
 
         {pushProgress.status !== 'idle' && (

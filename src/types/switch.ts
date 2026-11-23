@@ -93,9 +93,31 @@ export interface CustomModelSpec {
   defaultBaud: number;
 }
 
+export interface SwitchHardeningConfig {
+  // Control Plane & Services
+  disableUnusedServices: boolean; // no service finger, pad, tcp/udp-small-servers
+  disableBootpAndSourceRoute: boolean; // no ip bootp server, no ip source-route, no ip gratuitous-arps
+  enableTcpKeepalives: boolean; // service tcp-keepalives-in & out
+  enableTimestampsLogging: boolean; // service timestamps log/debug datetime msec localtime
+  limitConsoleLogging: boolean; // logging console warnings
+  // Auth & Brute-Force Protection
+  enableAaaNewModel: boolean; // aaa new-model + local auth/exec
+  minPasswordLength: number; // security passwords min-length (0 = disabled)
+  enableLoginBruteForceBlock: boolean; // login block-for 120 attempts 3 within 60 + on-failure/success log
+  sshSourceVlanEnabled: boolean; // ip ssh source-interface Vlan<mgmtVlanId>
+  vtyAclEnabled: boolean; // standard ACL MGMT_SSH_ONLY + access-class in
+  vtyAllowedSubnet: string; // e.g. "192.168.99.0 0.0.0.255"
+  // Layer 2 & SVI Hardening
+  globalBpduGuardDefault: boolean; // spanning-tree portfast bpduguard default
+  disableDtpNegotiation: boolean; // switchport nonegotiate on access/trunk ports
+  hardenSviInterfaces: boolean; // no ip redirects / no ip unreachables / no ip proxy-arp on SVIs
+  shutdownVlan1Interface: boolean; // interface Vlan1 -> no ip address + shutdown (console cable safe)
+}
+
 export interface SwitchConfigState {
   modelId: string;
   customModel?: CustomModelSpec;
+  hardening?: SwitchHardeningConfig;
   // System & Management
   hostname: string;
   domainName: string;
