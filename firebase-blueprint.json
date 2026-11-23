@@ -1,0 +1,215 @@
+{
+  "entities": {
+    "SwitchProfile": {
+      "title": "SwitchProfile",
+      "description": "Saved Cisco switch configuration profile created in the Config Generator.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "profileName": {
+          "type": "string",
+          "description": "Display name of the saved switch configuration profile.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "modelId": {
+          "type": "string",
+          "description": "Cisco switch model identifier.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Configured switch hostname.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "mgmtIp": {
+          "type": "string",
+          "description": "Management SVI IP address.",
+          "maxLength": 45
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional engineer notes for this switch configuration.",
+          "maxLength": 300
+        },
+        "configData": {
+          "type": "object",
+          "description": "Native Firestore map storing SwitchConfigState fields."
+        },
+        "generatedCli": {
+          "type": "string",
+          "description": "Generated Cisco IOS CLI text.",
+          "maxLength": 120000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last-updated timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "profileName",
+        "modelId",
+        "hostname",
+        "configData",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FleetSwitch": {
+      "title": "FleetSwitch",
+      "description": "Managed Cisco switch entry for the SSH Fleet Dashboard (no secrets stored).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "description": "Switch label or hostname.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "host": {
+          "type": "string",
+          "description": "IPv4 or DNS hostname of the switch.",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "port": {
+          "type": "integer",
+          "description": "SSH TCP port (1-65535)."
+        },
+        "username": {
+          "type": "string",
+          "description": "SSH login username.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical rack or floor location.",
+          "maxLength": 128
+        },
+        "modelSeries": {
+          "type": "string",
+          "description": "Cisco switch series name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["ssh", "simulator"],
+          "description": "Connection transport mode."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "label",
+        "host",
+        "port",
+        "username",
+        "modelSeries",
+        "mode",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SwitchBackup": {
+      "title": "SwitchBackup",
+      "description": "Captured running-config backup snapshot from a managed switch.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "switchId": {
+          "type": "string",
+          "description": "Identifier of the source FleetSwitch document.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Hostname captured in the backup.",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "configText": {
+          "type": "string",
+          "description": "Full running-config text.",
+          "minLength": 1,
+          "maxLength": 200000
+        },
+        "lineCount": {
+          "type": "integer",
+          "description": "Number of lines in the config snapshot."
+        },
+        "capturedAt": {
+          "type": "string",
+          "description": "ISO timestamp when backup was captured.",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": [
+        "ownerId",
+        "switchId",
+        "hostname",
+        "configText",
+        "lineCount",
+        "capturedAt",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/switchProfiles/{profileId}": {
+      "schema": { "$ref": "#/entities/SwitchProfile" },
+      "description": "Saved Cisco switch configuration profiles created by the authenticated engineer."
+    },
+    "/fleetSwitches/{switchId}": {
+      "schema": { "$ref": "#/entities/FleetSwitch" },
+      "description": "Managed Cisco switches inventory for the SSH Fleet Dashboard."
+    },
+    "/switchBackups/{backupId}": {
+      "schema": { "$ref": "#/entities/SwitchBackup" },
+      "description": "Captured running-config backup snapshots."
+    }
+  }
+}

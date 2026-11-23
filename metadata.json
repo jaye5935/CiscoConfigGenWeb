@@ -1,0 +1,6 @@
+{
+  "name": "CiscoSwitch Studio",
+  "description": "Web-based Cisco Switch Config Generator with direct USB/RS232 Web Serial console loading for Catalyst and Business switch models.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

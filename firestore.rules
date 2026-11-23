@@ -1,0 +1,192 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(ownerId) {
+      return isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    function isValidSwitchProfile(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'profileName',
+        'modelId',
+        'hostname',
+        'configData',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'profileName',
+        'modelId',
+        'hostname',
+        'mgmtIp',
+        'notes',
+        'configData',
+        'generatedCli',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+      data.ownerId == request.auth.uid &&
+      data.profileName is string && data.profileName.size() >= 1 && data.profileName.size() <= 100 &&
+      data.modelId is string && data.modelId.size() >= 1 && data.modelId.size() <= 64 &&
+      data.hostname is string && data.hostname.size() >= 1 && data.hostname.size() <= 64 &&
+      (!('mgmtIp' in data) || (data.mgmtIp is string && data.mgmtIp.size() <= 45)) &&
+      (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+      data.configData is map &&
+      (!('generatedCli' in data) || (data.generatedCli is string && data.generatedCli.size() <= 120000)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidFleetSwitch(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'label',
+        'host',
+        'port',
+        'username',
+        'modelSeries',
+        'mode',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'label',
+        'host',
+        'port',
+        'username',
+        'location',
+        'modelSeries',
+        'mode',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+      data.ownerId == request.auth.uid &&
+      data.label is string && data.label.size() >= 1 && data.label.size() <= 64 &&
+      data.host is string && data.host.size() >= 1 && data.host.size() <= 253 &&
+      data.port is int && data.port >= 1 && data.port <= 65535 &&
+      data.username is string && data.username.size() >= 1 && data.username.size() <= 128 &&
+      (!('location' in data) || (data.location is string && data.location.size() <= 128)) &&
+      data.modelSeries is string && data.modelSeries.size() >= 1 && data.modelSeries.size() <= 80 &&
+      data.mode is string && (data.mode == 'ssh' || data.mode == 'simulator') &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSwitchBackup(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'switchId',
+        'hostname',
+        'configText',
+        'lineCount',
+        'capturedAt',
+        'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'switchId',
+        'hostname',
+        'configText',
+        'lineCount',
+        'capturedAt',
+        'createdAt'
+      ]) &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+      data.ownerId == request.auth.uid &&
+      isValidId(data.switchId) &&
+      data.hostname is string && data.hostname.size() >= 1 && data.hostname.size() <= 64 &&
+      data.configText is string && data.configText.size() >= 1 && data.configText.size() <= 200000 &&
+      data.lineCount is int && data.lineCount >= 1 && data.lineCount <= 200000 &&
+      data.capturedAt is string && data.capturedAt.size() >= 1 && data.capturedAt.size() <= 40 &&
+      data.createdAt is timestamp;
+    }
+
+    match /switchProfiles/{profileId} {
+      allow get: if isValidId(profileId) && isOwner(existing().ownerId);
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(profileId) && isSignedIn() &&
+        isValidSwitchProfile(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(profileId) &&
+        isValidSwitchProfile(incoming()) &&
+        isOwner(existing().ownerId) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'profileName',
+          'modelId',
+          'hostname',
+          'mgmtIp',
+          'notes',
+          'configData',
+          'generatedCli',
+          'updatedAt'
+        ]);
+      allow delete: if isValidId(profileId) && isOwner(existing().ownerId);
+    }
+
+    match /fleetSwitches/{switchId} {
+      allow get: if isValidId(switchId) && isOwner(existing().ownerId);
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(switchId) && isSignedIn() &&
+        isValidFleetSwitch(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(switchId) &&
+        isValidFleetSwitch(incoming()) &&
+        isOwner(existing().ownerId) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'label',
+          'host',
+          'port',
+          'username',
+          'location',
+          'modelSeries',
+          'mode',
+          'updatedAt'
+        ]);
+      allow delete: if isValidId(switchId) && isOwner(existing().ownerId);
+    }
+
+    match /switchBackups/{backupId} {
+      allow get: if isValidId(backupId) && isOwner(existing().ownerId);
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(backupId) && isSignedIn() &&
+        isValidSwitchBackup(incoming()) &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(backupId) && isOwner(existing().ownerId);
+    }
+  }
+}
