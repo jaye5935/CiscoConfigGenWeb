@@ -87,6 +87,7 @@ export const GuideView: React.FC<GuideViewProps> = ({ lang, dataDir, onNavigate 
 
   const localRunCommands = `npm install\nnpm run dev`;
   const productionRunCommands = `npm install\nnpm run build\nnpm start`;
+  const windowsBatScript = `start "" http://localhost:3000\nnpm run dev`;
   const ciscoSshPrepCommands = `configure terminal
 hostname SW-ACCESS-01
 ip domain-name lab.local
@@ -300,6 +301,68 @@ write memory`;
                     </p>
                   </div>
                 ))}
+              </div>
+
+              {/* Step-by-step PC Download, Storage Folder & Launcher Guide */}
+              <div className="p-4 lg:px-5 bg-blue-50/40 border-t border-slate-200 space-y-3">
+                <div className="flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-blue-600 shrink-0" />
+                  <h3 className="text-xs font-semibold text-slate-900">
+                    {lang === 'fa'
+                      ? 'نحوه دریافت فایل‌ها، محل ذخیره روی کامپیوتر و اجرای برنامه'
+                      : 'How to Download, Store & Run Locally on Your PC'}
+                  </h3>
+                </div>
+                <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-700 leading-relaxed">
+                  <li>
+                    {lang === 'fa'
+                      ? 'دریافت فایل‌ها: از منوی Export / Download در نوار بالای ویرایشگر، پروژه را به صورت فایل ZIP دانلود کنید.'
+                      : 'Download project files: use the Export / Download ZIP option in the editor toolbar.'}
+                  </li>
+                  <li>
+                    {lang === 'fa'
+                      ? 'محل ذخیره روی کامپیوتر: فایل ZIP را در یک مسیر کوتاه بدون حروف فارسی یا فاصله (مثلاً D:\\CiscoSwitchStudio یا C:\\Apps\\CiscoSwitchStudio) از حالت فشرده خارج کنید. از قرار دادن پوشه داخل Program Files خودداری کنید تا برنامه بتواند آزادانه در پوشه data ذخیره کند.'
+                      : 'Where to save: extract the ZIP into a short path without spaces (e.g. D:\\CiscoSwitchStudio). Avoid Program Files so local disk storage in data/ stays writable.'}
+                  </li>
+                  <li>
+                    {lang === 'fa'
+                      ? 'کدام فایل اجرا می‌شود؟ این برنامه فایل .exe ندارد و هسته سرور آن فایل server.ts است که توسط Node.js اجرا می‌شود. وارد پوشه برنامه شوید، در نوار آدرس بالای پوشه cmd بنویسید و Enter بزنید.'
+                      : 'Which file runs? There is no .exe; Node.js executes server.ts. Open a terminal/CMD inside the extracted folder.'}
+                  </li>
+                  <li>
+                    {lang === 'fa'
+                      ? 'فقط بار اول (با اینترنت) دستور npm install را بزنید و از آن به بعد برای اجرای همیشگی و کاملاً آفلاین دستور npm run dev را اجرا کرده و آدرس http://localhost:3000 را در Chrome یا Edge باز کنید.'
+                      : 'Run npm install once (requires internet), then anytime offline run npm run dev and open http://localhost:3000 in Chrome or Edge.'}
+                  </li>
+                </ol>
+
+                <div className="bg-white border border-slate-200 rounded p-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-medium text-slate-800">
+                      {lang === 'fa'
+                        ? 'فایل میانبر ویندوز (اختیاری): فایلی با نام start-app.bat داخل پوشه بسازید تا با دابل‌کلیک اجرا شود:'
+                        : 'Optional Windows double-click launcher (save as start-app.bat inside the app folder):'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy('win-bat', windowsBatScript)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded transition-colors shrink-0"
+                    >
+                      {copiedId === 'win-bat' ? (
+                        <Check className="w-3 h-3 text-emerald-600" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                      <span>{copiedId === 'win-bat' ? (lang === 'fa' ? 'کپی شد' : 'Copied') : lang === 'fa' ? 'کپی' : 'Copy'}</span>
+                    </button>
+                  </div>
+                  <pre
+                    dir="ltr"
+                    className="p-2 bg-slate-900 text-emerald-300 rounded text-[11px] font-mono overflow-x-auto leading-relaxed"
+                  >
+                    {windowsBatScript}
+                  </pre>
+                </div>
               </div>
 
               {/* Offline Local Installation & Execution Commands */}
